@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>波シミュレーター 仕組みマニュアル</title>
+<style>
+:root{--bg:#fbfdff;--tx:#33445a;--blue:#d6ebff;--mint:#d8f5e8;--pink:#ffe0ea;--lemon:#fff5cf;--lav:#e8deff;--hb:#4a90c8;--hm:#3aa57f;--hp:#d9628b;--hl:#b58a1d;--hv:#7a5fc4}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--tx);font-family:"Hiragino Maru Gothic ProN","Hiragino Sans","Yu Gothic",sans-serif;line-height:1.85;font-size:16px}
+.wrap{max-width:760px;margin:0 auto;padding:0 18px 60px}
+header{background:linear-gradient(135deg,var(--blue),var(--lav) 60%,var(--pink));padding:48px 18px 40px;text-align:center}
+header h1{margin:0 0 8px;font-size:clamp(24px,6vw,36px);color:#2f5f8f}
+header p{margin:0;opacity:.8}
+nav{display:flex;flex-wrap:wrap;gap:8px;justify-content:center;margin:22px 0}
+nav a{background:#fff;border:2px solid var(--blue);border-radius:99px;padding:4px 14px;font-size:13px;color:var(--hb);text-decoration:none}
+section{margin:40px 0}
+h2{font-size:22px;margin:0 0 12px;padding:6px 14px;border-radius:12px;display:inline-block}
+.c1 h2{background:var(--blue);color:var(--hb)}.c2 h2{background:var(--mint);color:var(--hm)}
+.c3 h2{background:var(--pink);color:var(--hp)}.c4 h2{background:var(--lemon);color:var(--hl)}.c5 h2{background:var(--lav);color:var(--hv)}
+h3{font-size:17px;margin:22px 0 6px;color:#44607e}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin:14px 0}
+.card{border-radius:16px;padding:14px;font-size:14px;line-height:1.6}
+.card b{display:block;font-size:15px;margin-bottom:4px}
+.eq{background:#fff;border:2px dashed #b9d6ee;border-radius:14px;padding:12px 16px;margin:12px 0;font-family:"Hiragino Mincho ProN",Georgia,serif;font-size:17px;text-align:center;overflow-x:auto;white-space:nowrap}
+.note{background:var(--lemon);border-radius:14px;padding:10px 14px;margin:14px 0;font-size:14.5px}
+.note::before{content:"💡 ";}
+.tech{background:var(--lav);border-radius:14px;padding:10px 14px;margin:14px 0;font-size:14.5px}
+.tech::before{content:"🎓 専門メモ：";font-weight:bold;color:var(--hv)}
+pre{background:#f3f7fb;border-radius:12px;padding:12px 14px;overflow-x:auto;font-size:13px;line-height:1.6;border-left:5px solid var(--blue)}
+code{background:#eef4fa;padding:1px 6px;border-radius:6px;font-size:.9em}
+.flow{display:flex;flex-wrap:wrap;align-items:center;gap:6px;justify-content:center;margin:16px 0;font-size:14px}
+.flow span{background:#fff;border:2px solid var(--mint);border-radius:12px;padding:6px 12px}
+table{width:100%;border-collapse:collapse;font-size:14px;margin:12px 0}
+th,td{padding:8px 10px;text-align:left;border-bottom:2px solid var(--blue)}th{background:var(--blue);color:var(--hb)}
+footer{text-align:center;opacity:.6;font-size:13px;padding:20px}
+</style>
+</head>
+<body>
+<header>
+  <h1>🌊 波シミュレーター 仕組みマニュアル</h1>
+  <p>「波ってプログラムでどう作るの？」を、物理といっしょにゆるっと解説</p>
+</header>
+<div class="wrap">
+<nav><a href="#s1">全体像</a><a href="#s2">波の足し算</a><a href="#s3">円運動と尖り</a><a href="#s4">ランダム</a><a href="#s5">白波</a><a href="#s6">泡と飛沫</a><a href="#s7">プログラム設計</a><a href="#s8">限界と次の一歩</a></nav>
+
+<section id="s1" class="c1">
+<h2>① まず全体像：4つの層</h2>
+<p>このシミュレーターは、実は「4枚のレイヤーを重ねた絵」です。それぞれ別の仕事をしています。</p>
+<div class="grid">
+<div class="card" style="background:var(--blue)"><b>🌊 波の形</b>きれいな波を11本、足し算して海面の高さを作る</div>
+<div class="card" style="background:var(--mint)"><b>🗺 泡マップ</b>波頭で生まれた泡を「記憶」して、後ろで薄れさせる</div>
+<div class="card" style="background:var(--pink)"><b>🫧 泡の粒</b>小さな泡が生まれ、水に乗って動き、弾ける</div>
+<div class="card" style="background:var(--lemon)"><b>💦 飛沫</b>泡が弾けた場所から、水しぶきが放物線で飛ぶ</div>
+</div>
+<div class="flow"><span>スライダー</span>→<span>数値（パラメータ）</span>→<span>GPUが計算</span>→<span>画面に表示</span></div>
+<div class="note">全部ブラウザの中で、リアルタイムに動いています。サーバーは使っていません。</div>
+</section>
+
+<section id="s2" class="c2">
+<h2>② 波は「足し算」でできている</h2>
+<h3>1本の波を式にすると</h3>
+<div class="eq">高さ ＝ A · sin( k·x − ω·t + φ )</div>
+<table>
+<tr><th>記号</th><th>意味</th><th>スライダーでは</th></tr>
+<tr><td>A</td><td>振幅（波の高さの半分）</td><td>風波の高さ</td></tr>
+<tr><td>λ（ラムダ）</td><td>波長（山から山まで）</td><td>風波の波長</td></tr>
+<tr><td>k = 2π / λ</td><td>波数（1mに波が何周期入るか）</td><td>—</td></tr>
+<tr><td>ω, t</td><td>時間の進み方と現在時刻</td><td>波の速さ・スロー倍率</td></tr>
+<tr><td>φ（ファイ）</td><td>位相（波のスタート位置のずれ）</td><td>🎲 乱数を変える</td></tr>
+</table>
+<h3>波の速さは、波長で決まる</h3>
+<p>深い海の波は、長い波ほど速く進みます。これは水の物理（分散関係）から出てきます。</p>
+<div class="eq">ω² ＝ g · k　→　速さ c ＝ √( g / k )　（g ＝ 9.8 m/s²）</div>
+<div class="tech">この「波長ごとに速さが違う」性質を<b>分散</b>と呼びます。光が虹に分かれるのと同じ言葉です。プログラムでは <code>sqrt(9.8/k)</code> の1行で入っています。</div>
+<h3>重ね合わせの原理</h3>
+<p>複数の波が同じ場所に来ると、高さは<b>単純に足し算</b>になります。これが「重ね合わせの原理」です。このシミュレーターは、風波を最大8本、うねりを3本、合計11本を足しています。波ごとに波長を <code>0.72倍</code> ずつ小さくして、大きなうねりの上に細かいさざ波が乗るようにしています。</p>
+</section>
+
+<section id="s3" class="c3">
+<h2>③ 水は円を描く、だから波頭が尖る</h2>
+<p>実際の水の粒は、波が通るとき<b>上下だけでなく前後にも動いて、円を描きます</b>。この動きをそのまま式にしたのが「Gerstner（ガーストナー）波」です。波の山は尖り、谷はなだらかになって、海らしい形になります。</p>
+<div class="eq">x ＝ x₀ ＋ Σ Qᵢ Aᵢ Dᵢ cos(fᵢ)<br>y ＝ Σ Aᵢ sin(fᵢ)<br>fᵢ ＝ kᵢ ( Dᵢ·x₀ − cᵢ t ) ＋ φᵢ</div>
+<table>
+<tr><th>記号</th><th>意味</th></tr>
+<tr><td>x₀</td><td>水の粒の「もともとの位置」（動く前）</td></tr>
+<tr><td>D</td><td>波の進む向き（風向で決まる）</td></tr>
+<tr><td>Q</td><td>尖り具合（スライダー「鋭さ」）</td></tr>
+<tr><td>Σ</td><td>11本ぶんを全部足す、という記号</td></tr>
+</table>
+<div class="tech">Qが大きすぎる（Q·k·A が1を超える）と、波が自分自身に絡まって、水面が裏返ります。このシミュレーターでは、その「ぎりぎり」を<b>白波が出る目安</b>にも使っています。</div>
+<h3>前が急な波にする</h3>
+<p>岸に近づく波は、前が急で後ろがなだらかです。位相を少しゆがめるだけで作れます。</p>
+<div class="eq">f′ ＝ f − a · sin(f)</div>
+<div class="note">泡が水に乗って動くのは、この「x₀（水の粒の元の位置）」を基準に計算しているからです。泡をx₀に固定すると、波が通るたび、水と一緒に自然に動きます。</div>
+</section>
+
+<section id="s4" class="c4">
+<h2>④ 一様じゃ変。ランダムが「本物らしさ」</h2>
+<p>実際の海は、向きも位相もバラバラな波の重なりです。だから規則正しい足し算では、人工的に見えます。ここには4つの工夫があります。</p>
+<div class="grid">
+<div class="card" style="background:var(--blue)"><b>位相をランダムに</b>波ごとのスタート位置をずらす</div>
+<div class="card" style="background:var(--mint)"><b>向きを散らす</b>風向を中心に±でばらつかせる</div>
+<div class="card" style="background:var(--pink)"><b>うねり</b>別方向から来る長い波を足す</div>
+<div class="card" style="background:var(--lemon)"><b>ムラ</b>場所ごとに高さを増減して、強弱をつける</div>
+</div>
+<div class="tech">乱数は「種（シード）」から作ります。同じ種なら同じ海が再現できるので、「🎲 乱数を変える」は種を変えているだけです。波を周波数ごとの正弦波に分解する考え方を<b>フーリエ解析</b>と呼び、本格的な海のCGは、この原理（FFT）で作られています。</div>
+</section>
+
+<section id="s5" class="c5">
+<h2>⑤ 白波：いつ泡は生まれる？</h2>
+<h3>泡のでき方の目安</h3>
+<p>波頭で水が寄せ集められ、混み合うほど、波は砕けやすくなります。その混み具合を、式で測ります。</p>
+<div class="eq">J ＝ Σ Qᵢ · kᵢ · Aᵢ · sin(fᵢ)</div>
+<p>Jが大きいほど「ここは砕けそう」です。これを0〜1の泡の量に直すのが、<code>smoothstep</code> という「なめらかなスイッチ」です。</p>
+<h3>泡マップ：泡に「記憶」を持たせる</h3>
+<p>白波は、波頭が過ぎたあとも泡が残って、ゆっくり消えます。これを再現するために、<b>泡の量を絵として保存する別の画面（泡マップ）</b>を用意して、毎フレームこう更新しています。</p>
+<div class="eq">新しい値 ＝ max( 古い値 − 時間 / 持続秒数 , 今の泡 )</div>
+<p>古い値を少し減らし、波頭の新しい泡と比べて、大きいほうを残すだけです。これで、波頭の後ろに、薄れていく泡の尾ができます。</p>
+<h3>泡のつぶつぶ感：ノイズ</h3>
+<p>泡の細かい模様は、<b>ノイズ</b>という「それっぽいランダムな濃淡」で作ります。大きさの違うノイズを重ねる<b>fBm</b>を使い、周波数を2倍、強さを半分ずつにしていきます。</p>
+<div class="eq">fBm ＝ n(p) ＋ ½ n(2p) ＋ ¼ n(4p) ＋ …</div>
+<p>網目状の泡は、ノイズを <code>1 − |2n − 1|</code> と加工して、線のように浮かせています。凹凸は、ノイズの傾き（勾配）から<b>法線</b>（面の向き）を作り、光を当てて陰影にしています。</p>
+</section>
+
+<section id="s6" class="c1">
+<h2>⑥ 泡の粒と飛沫：ボールを投げる物理</h2>
+<h3>飛沫は、投げたボールと同じ</h3>
+<p>飛沫の粒は、波頭から飛び出したあと、重力で落ちます。高校物理の放物運動です。</p>
+<div class="eq">y ＝ y₀ ＋ v · t − ½ · g · t²</div>
+<p>横方向には、空気抵抗で少しずつ失速する式を使っています。</p>
+<div class="eq">進んだ距離 ＝ v · ( 1 − e<sup>−0.4 t</sup> ) / 0.4</div>
+<h3>10万粒でも軽い、「記録しない」計算</h3>
+<p>普通は、粒ごとに「今どこにいる？」を毎フレーム更新します。でも、数万個になるとスマホには重すぎます。そこで、<b>粒の位置を保存せず、時刻 t から毎回、式で直接求める</b>方法にしています。「生まれた時刻」と「今」の差（年齢）さえ分かれば、位置は式で出せるからです。</p>
+<div class="tech">この方式を<b>ステートレス（状態を持たない）</b>な計算と呼び、GPUがとても得意です。粒ごとの乱数は <code>fract(sin(…)×43758.5)</code> という、少し不思議な「ハッシュ関数」で作っています。</div>
+<h3>泡の一生</h3>
+<div class="flow"><span>🫧 生まれる</span>→<span>膨らむ</span>→<span>水に乗って移動</span>→<span>縮んで弾ける</span>→<span>💦 飛沫が飛ぶ</span></div>
+<p>弾ける時刻と場所から、そのまま飛沫を計算するので、泡と飛沫が自然につながります。</p>
+</section>
+
+<section id="s7" class="c2">
+<h2>⑦ プログラムの設計：3つの言語が分業</h2>
+<table>
+<tr><th>担当</th><th>言語</th><th>やっていること</th></tr>
+<tr><td>見た目のパネル</td><td>HTML / CSS</td><td>スライダーとボタンを置く</td></tr>
+<tr><td>司令塔</td><td>JavaScript（three.js）</td><td>数値の管理、毎フレームの指示</td></tr>
+<tr><td>計算と描画の本体</td><td>GLSL（シェーダー）</td><td>GPUで波・泡・飛沫を一気に計算</td></tr>
+</table>
+<h3>データの流れ</h3>
+<div class="flow"><span>スライダー</span>→<span>オブジェクト P</span>→<span>U() が uniform に反映</span>→<span>シェーダーが読む</span></div>
+<pre>const P = { height:1.2, steep:0.7, wind:30, ... };   // 全パラメータ
+slider.addEventListener('input', () => { P[k] = +slider.value; U(); });</pre>
+<h3>シェーダーの用語</h3>
+<table>
+<tr><th>用語</th><th>ひとこと説明</th></tr>
+<tr><td>頂点シェーダー</td><td>メッシュ（9万点の網）の各点を、波の高さへ動かす</td></tr>
+<tr><td>フラグメントシェーダー</td><td>画面の1ピクセルごとの色を決める</td></tr>
+<tr><td>uniform</td><td>全員で共通の値（波の高さ、時刻など）</td></tr>
+<tr><td>attribute</td><td>粒ごとに違う値（乱数の種）</td></tr>
+<tr><td>varying</td><td>頂点からピクセルへ渡す値</td></tr>
+</table>
+<h3>毎フレームやっていること（1秒に約60回）</h3>
+<pre>function loop(now){
+  T += dt * スロー倍率 * 波の速さ;   // 1. 時間を進める
+  foamStep();                        // 2. 泡マップを更新
+  cam.position.set(...);             // 3. カメラを置く
+  R.render(sc, cam);                 // 4. 描画
+  requestAnimationFrame(loop);       // 5. 次のフレームへ
+}</pre>
+<div class="note">JavaScriptがやるのは「時間を進めて、描いてね」と指示するだけです。重い計算は、全部GPUが並列でやっています。</div>
+<h3>3つの設計の工夫</h3>
+<div class="grid">
+<div class="card" style="background:var(--blue)"><b>① メッシュ</b>300×300の網（約9万点）を波の高さで動かす</div>
+<div class="card" style="background:var(--mint)"><b>② 泡マップ</b>画面とは別の絵に書き込み、前の絵と交互に使う（ピンポン）</div>
+<div class="card" style="background:var(--pink)"><b>③ 粒をGPUで</b>位置を保存せず、時刻から式で直接求める</div>
+</div>
+</section>
+
+<section id="s8" class="c3">
+<h2>⑧ できないことと、次の一歩</h2>
+<h3>波頭の巻き込みが作れない理由</h3>
+<p>このシミュレーターの海面は、「場所（x, z）を決めると、高さ y が1つ決まる」形です。だから、波頭が前に張り出して、下に空洞ができる<b>巻き波</b>は、原理的に表現できません。</p>
+<h3>本物に近づく方法</h3>
+<table>
+<tr><th>方法</th><th>特徴</th></tr>
+<tr><td>FFT海洋（Tessendorf）</td><td>大海原の見た目を軽く再現。映画やゲームの定番</td></tr>
+<tr><td>SPH（粒子法）</td><td>水を粒の集まりとして計算。砕波や飛沫が作れるが重い</td></tr>
+<tr><td>格子法（VOF）</td><td>水と空気の境目を追う。研究や映像制作向け</td></tr>
+</table>
+<p>これらは、水の動きを支配する<b>ナビエ・ストークス方程式</b>を解いています。今回の波は、その「見た目を真似る近道」です。</p>
+<h3>学ぶならこの順番がおすすめ</h3>
+<div class="flow"><span>① JavaScript の基本</span>→<span>② Canvas / three.js</span>→<span>③ GLSL（シェーダー）</span>→<span>④ 流体シミュレーション</span></div>
+<div class="note">③の入門には、無料の解説サイト「The Book of Shaders」が定番です。このシミュレーターの <code>waves.html</code> は、1ファイルで全部入っているので、スライダーの値や式を書き換えて、変化を眺めるだけでも勉強になります。</div>
+</section>
+</div>
+<footer>🌊 波シミュレーター 仕組みマニュアル</footer>
+</body>
+</html>
