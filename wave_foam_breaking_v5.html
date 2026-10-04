@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>波シミュレーター</title>
+<style>
+:root{--bg:#0b1a24;--panel:rgba(10,24,34,.82);--fg:#e8f3f8;--ac:#4fc3d9;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);font-family:-apple-system,"Hiragino Sans",sans-serif;overflow:hidden}
+canvas{display:block;width:100%;height:100%}
+#panel{position:fixed;left:8px;right:8px;bottom:calc(8px + env(safe-area-inset-bottom,0px));max-width:420px;background:var(--panel);backdrop-filter:blur(8px);border-radius:14px;padding:10px 14px;max-height:48vh;overflow-y:auto;font-size:13px}
+#panel.min .body{display:none}
+.top{display:flex;justify-content:space-between;align-items:center;gap:8px}
+.man{display:inline-block;background:rgba(255,255,255,.12);color:var(--fg);border-radius:8px;padding:6px 10px;font-size:12px;text-decoration:none;white-space:nowrap}
+button{background:rgba(255,255,255,.12);color:var(--fg);border:0;border-radius:8px;padding:6px 10px;font-size:12px}
+button:active{background:var(--ac)}
+.row{display:grid;grid-template-columns:96px 1fr 50px;align-items:center;gap:6px;margin:6px 0}
+.row output{text-align:right;opacity:.7;font-variant-numeric:tabular-nums}
+input[type=range]{width:100%;accent-color:var(--ac)}
+.pre{display:flex;gap:6px;flex-wrap:wrap;margin:8px 0}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="panel">
+  <div class="top"><b>波シミュレーター</b><span><a class="man" href="wave-manual.html" target="_blank" rel="noopener">📖 マニュアル</a> <button id="tog">開く/閉じる</button></span></div>
+  <div class="body">
+    <div class="pre">
+      <button data-p="calm">穏やか</button><button data-p="swell">うねり</button>
+      <button data-p="storm">荒れた海</button><button data-p="break">砕波っぽい</button><button data-p="shore">岸近くの波</button>
+      <button id="rnd">🎲 乱数を変える</button>
+    </div>
+    <div id="ctl"></div>
+  </div>
+</div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+const P={height:1.2,length:22,steep:0.7,spread:0.5,wind:30,speed:1,slow:1,foam:0.8,spray:1,swellH:0.8,swellDir:200,patch:0.6,cam:14,dist:34,hue:0.5,persist:3,grain:0.8,sprayN:60000,bub:1,flat:0.85,asym:0.4,nW:8,pitch:14,crest:1.35,foamDetail:1.6,foamCurl:1.0,sat:0.7,lum:1,over:0};
+const DEF=[
+ ['height','風波の高さ',0.1,4,0.05],['length','風波の波長',6,60,0.5],['steep','鋭さ(尖り)',0,1.6,0.01],['asym','非対称(前が急)',0,0.9,0.01],['nW','風波の本数',1,8,1],
+ ['spread','方向の散らばり',0,1.5,0.01],['wind','風向(°)',0,360,1],['swellH','うねりの高さ',0,3,0.05],['swellDir','うねり方向(°)',0,360,1],
+ ['patch','ムラ(不均一さ)',0,1,0.01],['speed','波の速さ',0.2,3,0.05],['slow','スロー倍率',0.05,1,0.01],
+ ['foam','白波の量',0,1.5,0.01],['persist','泡の持続(秒)',0.3,10,0.1],['grain','泡の細かさ',0.2,3,0.05],['bub','泡の量(粒)',0,3,0.05],['spray','飛沫の量',0,2,0.05],['sprayN','泡の粒数',5000,100000,5000],['flat','泡の膜(平面)',0,1,0.01],['cam','カメラ高さ',2,50,0.5],['dist','カメラ距離',12,80,1],['pitch','カメラ俯角(°)',5,80,1],['crest','砕波の盛り上がり',0,2.5,0.05],['foamDetail','泡の塊の細かさ',0.5,3,0.05],['foamCurl','泡の巻き込み',0,2,0.05],['hue','水の色',0,1,0.01],['sat','水の彩度',0,1,0.01],['lum','水の明るさ',0.5,2,0.01],['over','曇り',0,1,0.01]];
+const ctl=document.getElementById('ctl');
+DEF.forEach(([k,l,mn,mx,st])=>{
+  const r=document.createElement('div');r.className='row';
+  r.innerHTML=`<span>${l}</span><input type=range id=s_${k} min=${mn} max=${mx} step=${st}><output id=o_${k}></output>`;
+  ctl.appendChild(r);
+  const s=r.querySelector('input');
+  s.addEventListener('input',()=>{P[k]=+s.value;sync(k)});
+});
+function sync(k){document.getElementById('s_'+k).value=P[k];document.getElementById('o_'+k).textContent=(+P[k]).toFixed(P[k]<10?2:0);U();}
+const BASE={bub:1,flat:.85,sprayN:60000,asym:.4,nW:8,pitch:14,cam:14,dist:34,hue:.5,sat:.7,lum:1,over:0,wind:30,swellDir:200,crest:1.35,foamDetail:1.6,foamCurl:1.0};
+const PRE0={
+ calm:{height:.4,length:26,steep:.25,spread:.8,speed:.7,foam:.1,spray:.1,swellH:.3,patch:.5},
+ swell:{height:1.8,length:45,steep:.45,spread:.2,speed:.9,foam:.2,spray:.2,swellH:1.2,patch:.4},
+ storm:{height:2.6,length:24,steep:1.0,spread:1.1,speed:1.4,foam:1.1,spray:1.5,swellH:1.0,patch:.8},
+ break:{height:2.2,length:18,steep:1.5,spread:.3,speed:1,foam:1.4,spray:1.8,swellH:.6,patch:.5,crest:1.75,foamDetail:1.9,foamCurl:1.15}};
+const PRE={};for(const k in PRE0)PRE[k]=Object.assign({},BASE,PRE0[k]);
+PRE.shore={height:.9,length:14,steep:1,asym:.75,nW:3,spread:.08,wind:90,swellH:0,swellDir:90,patch:.55,speed:.9,slow:1,foam:1.2,persist:3.5,grain:1.6,spray:1.2,sprayN:70000,bub:1.5,flat:.9,cam:8,dist:14,pitch:35,hue:.42,sat:.25,lum:1.3,over:.8};
+document.querySelectorAll('[data-p]').forEach(b=>b.onclick=()=>{Object.assign(P,PRE[b.dataset.p]);DEF.forEach(d=>sync(d[0]))});
+document.getElementById('tog').onclick=()=>document.getElementById('panel').classList.toggle('min');
+document.getElementById('rnd').onclick=()=>reseed(Math.floor(Math.random()*1e9));
+
+// ---- 乱数(波ごとの方向ずれ・位相)
+const RA=new Float32Array(11),RP=new Float32Array(11);let S1=0,S2=0;
+function reseed(s){let a=s;const r=()=>{a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296};
+ for(let i=0;i<11;i++){RA[i]=r()-.5;RP[i]=r()*6.2832}S1=r()*6.28;S2=r()*6.28;U();}
+
+const cv=document.getElementById('c');
+const R=new THREE.WebGLRenderer({canvas:cv,antialias:true});
+R.setPixelRatio(Math.min(devicePixelRatio,2));
+const sc=new THREE.Scene();
+const cam=new THREE.PerspectiveCamera(55,1,0.5,1000);
+const uni={uT:{value:0},uH:{value:1},uL:{value:20},uQ:{value:.7},uS:{value:.5},uW:{value:0},uWs:{value:0},uHs:{value:0},uPt:{value:.6},uSd:{value:new THREE.Vector2()},
+ uRA:{value:RA},uRP:{value:RP},uFoam:{value:null},uMapMin:{value:new THREE.Vector2(-120,-150)},uMapSize:{value:new THREE.Vector2(240,260)},uGrain:{value:.8},uAs:{value:.4},uN:{value:8},uOver:{value:0},uBub:{value:1},uFl:{value:.85},uF:{value:.8},uCrest:{value:1.35},uFoamDetail:{value:1.6},uFoamCurl:{value:1.0},uCam:{value:new THREE.Vector3()},uDeep:{value:new THREE.Color()},uShal:{value:new THREE.Color()}};
+const WG=`uniform float uT,uH,uL,uQ,uS,uW,uWs,uHs,uPt,uAs,uN;uniform vec2 uSd;uniform float uRA[11],uRP[11];
+void waves(vec2 xz,float T,out vec3 d,out vec3 nn,out float J,out vec3 vel,out vec2 cv){
+ d=vec3(0.);nn=vec3(0.);J=0.;vel=vec3(0.);cv=vec2(0.);float js=0.;
+ for(int i=0;i<11;i++){
+  float fi=float(i);bool sw=i>=8;float j=sw?fi-8.:fi;
+  float a=sw?uWs+.25*uRA[i]:uW+uS*2.*uRA[i];
+  vec2 D=vec2(cos(a),sin(a));
+  float len=sw?uL*2.6*pow(.8,j):uL*pow(.72,fi);
+  float k=6.28318/len;
+  float A0=sw?uHs*.5*pow(.8,j):uH*.5*pow(.72,fi)*step(fi+.5,uN);
+  float nz=.5+.5*sin(xz.x*.031*(1.+.3*fi)+T*.13+uSd.x+fi*1.7)*sin(xz.y*.027*(1.+.2*fi)-T*.09+uSd.y+fi*2.3);
+  float A=A0*clamp(1.+uPt*(nz*2.-1.)*.85,.15,1.85);
+  float c=sqrt(9.8/k);float kc=k*c;
+  float f=k*(dot(D,xz)-c*T)+uRP[i];
+  float g=f-uAs*sin(f);float gp=1.-uAs*cos(f);float sf=sin(g),cf=cos(g);
+  float Q=uQ*(sw?.6:1.)/(k*max(A0,.001)*max(uN,1.));
+  d.xz+=Q*A*D*cf;d.y+=A*sf;
+  nn.xz-=D*k*A*cf*gp;nn.y-=Q*k*A*sf*gp;
+  vel+=gp*vec3(Q*A*D.x*sf*kc,-A*cf*kc,Q*A*D.y*sf*kc);
+  float jw=Q*k*A*sf*gp;J+=jw;
+  if(jw>0.){cv+=jw*c*D;js+=jw;}
+ }
+ cv=js>0.?cv/js:vec2(0.);
+}`;
+const vs=WG+`
+varying vec3 vP,vN;varying float vJ;varying vec2 vXZ;
+void main(){
+ vec2 xz=vec2(position.x,-position.y);
+ vec3 d,nn,vel;vec2 cv;float J;waves(xz,uT,d,nn,J,vel,cv);
+ // 砕波の立体感：波頭の領域だけ実際の水面を持ち上げ、進行方向へ少し張り出させる。
+ float br=smoothstep(.20,.68,J+d.y*.08);
+ float cn=.5+.5*sin(xz.x*.43+xz.y*.31+uT*.55)+.12*sin(xz.x*.91-xz.y*.57-uT*.8);
+ float lift=br*br*(.11+.09*clamp(cn,0.,1.))*uCrest;
+ vec2 WD=vec2(cos(uW),sin(uW));
+ float over=br*br*(.10+.06*uFoamCurl);
+ vec3 w=vec3(xz.x+d.x+WD.x*over,d.y+lift,xz.y+d.z+WD.y*over);
+ vP=w;vN=normalize(vec3(nn.x,1.+nn.y,nn.z));vJ=J;vXZ=xz;
+ gl_Position=projectionMatrix*viewMatrix*vec4(w,1.);
+}`;
+const fs=`
+uniform vec3 uCam,uDeep,uShal;uniform float uF,uGrain,uOver,uFl;uniform sampler2D uFoam;uniform vec2 uMapMin,uMapSize;
+varying vec3 vP,vN;varying float vJ;varying vec2 vXZ;
+float hs(vec2 p){p=fract(p*vec2(123.34,456.21));p+=dot(p,p+45.32);return fract(p.x*p.y);}
+float vn(vec2 p){vec2 i=floor(p),f=fract(p);f=f*f*(3.-2.*f);
+ return mix(mix(hs(i),hs(i+vec2(1.,0.)),f.x),mix(hs(i+vec2(0.,1.)),hs(i+vec2(1.,1.)),f.x),f.y);}
+float fbm(vec2 p){float a=.5,s=0.;for(int i=0;i<5;i++){s+=a*vn(p);p=p*2.03+17.;a*=.5;}return s;}
+float foamTap(vec2 uv){vec2 p=uv*512.-.5;vec2 i=floor(p),f=fract(p);
+ float a=texture2D(uFoam,(i+.5)/512.).r,b=texture2D(uFoam,(i+vec2(1.5,.5))/512.).r,c=texture2D(uFoam,(i+vec2(.5,1.5))/512.).r,d=texture2D(uFoam,(i+1.5)/512.).r;
+ return mix(mix(a,b,f.x),mix(c,d,f.x),f.y);}
+float fbm3(vec2 p){float a=.5,s=0.;for(int i=0;i<3;i++){s+=a*vn(p);p=p*2.03+17.;a*=.5;}return s;}
+vec3 sky(vec3 r){
+ float t=clamp(r.y,0.,1.);
+ vec3 s=mix(vec3(.75,.85,.9),vec3(.25,.5,.8),pow(t,.5));
+ vec3 sun=normalize(vec3(.4,.5,-.6));
+ s+=vec3(1.,.9,.7)*pow(max(dot(r,sun),0.),200.)*2.*(1.-uOver);
+ return mix(s,vec3(.64,.68,.7),uOver*.85);
+}
+void main(){
+ vec3 N=normalize(vN);vec3 V=normalize(uCam-vP);vec3 L=normalize(vec3(.4,.5,-.6));
+ float dist=length(uCam-vP);
+ float fr=0.02+0.98*pow(1.-max(dot(N,V),0.),5.);
+ vec3 R=reflect(-V,N);R.y=abs(R.y);
+ float depth=clamp(vP.y*.25+.5,0.,1.);
+ vec3 body=mix(uDeep,uShal,depth*.6+.2*max(dot(N,L),0.));
+ vec3 col=mix(body,sky(R),fr);
+ col+=vec3(1.,.95,.85)*pow(max(dot(R,L),0.),150.)*1.5*(1.-uOver);
+ vec2 uv=(vXZ-uMapMin)/uMapSize;
+ float inm=smoothstep(0.,.03,uv.x)*smoothstep(0.,.03,1.-uv.x)*smoothstep(0.,.03,uv.y)*smoothstep(0.,.03,1.-uv.y);
+ float crest=smoothstep(.20,.68,vJ+vP.y*.08);
+ float fv=mix(crest,foamTap(uv),inm);
+ fv=clamp(fv*uF,0.,1.5);
+ float n=clamp((fbm(vXZ*uGrain)-.2)*1.6,0.,1.);
+ n=mix(n,.5,smoothstep(50.,220.,dist));
+ float cov=smoothstep(1.-fv*1.1,1.-fv*1.1+.2,n);
+ float web=smoothstep(.62,.95,1.-abs(2.*fbm(vXZ*uGrain*1.7+7.)-1.));
+ web=mix(web,.35,smoothstep(50.,220.,dist))*smoothstep(.04,.35,fv);
+ cov=mix(web,cov,smoothstep(.5,.9,fv));
+ vec3 fcol=vec3(.96,.98,1.);
+ if(cov>.02){
+  vec2 pp=vXZ*uGrain*3.;float e=.07;
+  float h0=fbm3(pp),hx=fbm3(pp+vec2(e,0.)),hz=fbm3(pp+vec2(0.,e));
+  vec3 Nf=normalize(N+vec3(-(hx-h0),0.,-(hz-h0))/e*(.8+fv));
+  float lit=max(dot(Nf,L),0.);
+  lit=mix(.5+.5*lit,.75+.2*lit,uOver);
+  float ao=mix(.6,1.,smoothstep(.25,.75,clamp((h0-.2)*1.6,0.,1.)));
+  fcol=mix(vec3(.58,.69,.76),vec3(.97,.98,1.),ao)*(.7+.35*lit);
+ }
+ col=mix(col,fcol,cov*.96*uFl);
+ col=mix(col,vec3(.75,.85,.9),smoothstep(80.,380.,dist));
+ gl_FragColor=vec4(col,1.);
+}`;
+const m=new THREE.Mesh(new THREE.PlaneGeometry(500,500,300,300),new THREE.ShaderMaterial({vertexShader:vs,fragmentShader:fs,uniforms:uni}));
+m.frustumCulled=false;sc.add(m);
+
+// ---- 立体的な砕波フォームの殻
+// 水面とは別メッシュにして、波頭の上・前・内側に厚みを持たせる。
+const foamShells=[];
+const foamShellVS=`uniform float uCrest,uFoamDetail,uFoamCurl,uLayer;
+${WG}
+varying vec3 fP,fN;varying float fB,fLayer;varying vec2 fXZ;
+void main(){
+ vec2 xz=vec2(position.x,-position.y);
+ vec3 d,nn,vel;vec2 cv;float J;waves(xz,uT,d,nn,J,vel,cv);
+ float br=smoothstep(.18,.72,J+d.y*.08);
+ float n=.5+.5*sin(xz.x*uFoamDetail*.83+xz.y*uFoamDetail*1.17+uT*.35)
+          *.5+.25*sin(xz.x*uFoamDetail*1.91-xz.y*uFoamDetail*1.37-uT*.27);
+ float breakup=smoothstep(.35,.82,br)*(.72+.28*n);
+ vec3 N=normalize(vec3(nn.x,1.+nn.y,nn.z));
+ vec2 WD=vec2(cos(uW),sin(uW));
+ float curl=br*br*(.035+.055*uFoamCurl);
+  vec3 w=vec3(xz.x+d.x+WD.x*br*.07,d.y,xz.y+d.z+WD.y*br*.07);
+ float layer=uLayer;
+ float thickness=(.055+.10*layer)*uCrest;
+ // layer 0 = water-contact foam, layer 1 = raised mass, layer 2 = forward lip
+ w += N*thickness*breakup;
+ w += vec3(WD.x,0.,WD.y)*curl*layer*breakup;
+ w.y += sin(xz.x*.8+xz.y*1.1+uT*.5+layer*2.0)*.025*breakup;
+ fP=w; fN=N; fB=breakup; fXZ=xz;
+ vec4 mv=modelViewMatrix*vec4(w,1.); gl_Position=projectionMatrix*mv;
+}`;
+
+function makeFoamShell(layer){
+ const g=new THREE.PlaneGeometry(500,500,220,220);
+ const a=new Float32Array(g.attributes.position.count);
+ a.fill(layer);
+  const mat=new THREE.ShaderMaterial({
+  uniforms:Object.assign({},uni,{uLayer:{value:layer}}),
+  vertexShader:foamShellVS,
+  fragmentShader:`uniform float uF,uFl,uOver,uFoamDetail;uniform vec3 uCam;
+ varying vec3 fP,fN;varying float fB,fLayer;varying vec2 fXZ;
+ float hs(vec2 p){p=fract(p*vec2(123.34,456.21));p+=dot(p,p+45.32);return fract(p.x*p.y);}
+ float vn(vec2 p){vec2 i=floor(p),q=fract(p);q=q*q*(3.-2.*q);return mix(mix(hs(i),hs(i+vec2(1.,0.)),q.x),mix(hs(i+vec2(0.,1.)),hs(i+vec2(1.,1.)),q.x),q.y);}
+ float fbm(vec2 p){float a=.5,s=0.;for(int i=0;i<4;i++){s+=a*vn(p);p=p*2.04+11.;a*=.5;}return s;}
+ void main(){
+  float edge=fbm(fXZ*uFoamDetail*.75+fLayer*3.7);
+  float lace=smoothstep(.28,.72,edge);
+  float cov=fB*(.62+.38*lace);
+  cov*=smoothstep(.12,.42,fB);
+  float dist=length(uCam-fP);
+  cov*=mix(1.,.72,smoothstep(70.,220.,dist));
+  vec3 L=normalize(vec3(.4,.5,-.6));
+  float lit=.72+.28*max(dot(normalize(fN),L),0.);
+  vec3 col=mix(vec3(.72,.80,.84),vec3(.99,1.,1.),.72+.28*lace)*lit;
+  // shell 0 is dense at the water boundary, outer shells are broken/lacy
+  float shellFade=1.-fLayer*.16;
+  gl_FragColor=vec4(col,cov*uF*uFl*shellFade*.92);
+  if(gl_FragColor.a<.025)discard;
+ }`,
+  transparent:true,depthWrite:false,side:THREE.DoubleSide
+ });
+ const mesh=new THREE.Mesh(g,mat);mesh.frustumCulled=false;sc.add(mesh);foamShells.push(mesh);
+}
+makeFoamShell(0.0);makeFoamShell(.55);makeFoamShell(1.0);
+R.setClearColor(0xbfd9e6);
+// ---- 泡マップ(波の粒子に固定された泡の履歴。波頭で生成され、後ろで薄れていく)
+const MS=512;
+const mkRT=()=>new THREE.WebGLRenderTarget(MS,MS,{type:THREE.HalfFloatType,format:THREE.RGBAFormat,minFilter:THREE.NearestFilter,magFilter:THREE.NearestFilter,depthBuffer:false});
+let fa=mkRT(),fb=mkRT();uni.uFoam.value=fa.texture;
+const fu=Object.assign({},uni,{uPrev:{value:null},uDec:{value:0}});
+const fsc=new THREE.Scene(),fcam=new THREE.OrthographicCamera(-1,1,1,-1,0,1);
+fsc.add(new THREE.Mesh(new THREE.PlaneGeometry(2,2),new THREE.ShaderMaterial({uniforms:fu,
+ vertexShader:`varying vec2 vUv;void main(){vUv=uv;gl_Position=vec4(position.xy,0.,1.);}`,
+ fragmentShader:WG+`uniform sampler2D uPrev;uniform float uDec;uniform vec2 uMapMin,uMapSize;varying vec2 vUv;
+ void main(){
+  vec2 xz=uMapMin+vUv*uMapSize;vec3 d,nn,vel;vec2 cv;float J;waves(xz,uT,d,nn,J,vel,cv);
+  float src=smoothstep(.22,.6,J+d.y*.08)*smoothstep(-.3,.6,vel.y);
+  float prev=texture2D(uPrev,vUv).r;
+  gl_FragColor=vec4(max(prev-uDec,src),0.,0.,1.);
+ }`})));
+function foamStep(dtS){
+ fu.uPrev.value=fa.texture;fu.uDec.value=Math.min(1,dtS/P.persist);
+ R.setRenderTarget(fb);R.render(fsc,fcam);R.setRenderTarget(null);
+ const t=fa;fa=fb;fb=t;uni.uFoam.value=fa.texture;
+}
+
+// ---- 泡と飛沫(GPU): 泡は波頭で生まれ、水面に乗って動き、膨らんで弾ける。弾けた位置から飛沫が飛ぶ
+const SH=`uniform vec3 uCam;uniform float uBub;
+float R(vec4 a,float c,float s){return fract(sin(dot(vec2(a.x*91.+a.y*53.+s*13.7,c*.37+a.z*31.+a.w*17.+s*7.31),vec2(127.1,311.7)))*43758.5453);}
+vec2 birthPos(vec4 a,float c){
+ float r0=R(a,c,0.);float z0=uCam.z-2.-120.*r0*r0;float hw=12.+(uCam.z-z0)*.75;
+ return vec2((R(a,c,1.)*2.-1.)*hw,z0);}
+float bAccept(vec4 a,float c,float tb,out vec2 b,out vec3 d,out vec3 vel,out vec2 cv,out float v){
+ b=birthPos(a,c);vec3 nn;float J;waves(b,tb,d,nn,J,vel,cv);
+ v=J+d.y*.08;float s=clamp((v-.3)/.4,0.,1.);s=s*s*(3.-2.*s);
+ return step(R(a,c,2.),s*uBub)*step(0.,vel.y);}
+#define HIDE {gl_Position=vec4(2.,2.,2.,1.);gl_PointSize=0.;vA=0.;return;}
+`;
+const sprayU=Object.assign({},uni,{uPx:{value:800},uSp:{value:1}});
+const NB=100000,KD=3;
+const sb=new Float32Array(NB*4);for(let i=0;i<sb.length;i++)sb[i]=Math.random();
+const ss=new Float32Array(NB*KD*4),sd=new Float32Array(NB*KD*4);
+for(let j=0;j<NB*KD;j++){const i=Math.floor(j/KD);for(let c=0;c<4;c++){ss[j*4+c]=sb[i*4+c];sd[j*4+c]=Math.random()}}
+const bg=new THREE.BufferGeometry();
+bg.setAttribute('position',new THREE.BufferAttribute(new Float32Array(NB*3),3));
+bg.setAttribute('aS',new THREE.BufferAttribute(sb,4));
+const sg=new THREE.BufferGeometry();
+sg.setAttribute('position',new THREE.BufferAttribute(new Float32Array(NB*KD*3),3));
+sg.setAttribute('aS',new THREE.BufferAttribute(ss,4));
+sg.setAttribute('aD',new THREE.BufferAttribute(sd,4));
+const bubPts=new THREE.Points(bg,new THREE.ShaderMaterial({uniforms:sprayU,transparent:true,depthWrite:false,
+ vertexShader:WG+SH+`attribute vec4 aS;uniform float uPx,uOver;varying float vA,vL;
+ void main(){
+  float L=.8+aS.z*1.6;
+  float x=uT/L+aS.w*50.;
+  float cyc=mod(floor(x),997.);float t=fract(x);float age=t*L;
+  vec2 b;vec3 d,vel;vec2 cv;float v;
+  if(bAccept(aS,cyc,uT-age,b,d,vel,cv,v)<.5)HIDE
+  vec2 bb=b+cv*age*.3;
+  vec3 d2,nn2,vl2;vec2 c2;float J2;
+  waves(bb,uT,d2,nn2,J2,vl2,c2);
+  float rr=R(aS,cyc,3.);
+  float rmax=.012+.1*rr*rr*rr;
+  float rad=rmax*(.3+.7*smoothstep(0.,.2,t))*(1.+.2*smoothstep(.75,.9,t))*(1.-smoothstep(.9,.99,t));
+  vec3 p=vec3(bb.x+d2.x,d2.y+rad*.1,bb.y+d2.z);
+  vec3 Nv=normalize(vec3(nn2.x,1.+nn2.y,nn2.z));
+  float lt=.62+.38*max(dot(Nv,normalize(vec3(.4,.5,-.6))),0.);
+  vL=mix(lt,.82,uOver*.7);
+  vec4 mv=modelViewMatrix*vec4(p,1.);
+  float px=2.*rad*uPx/-mv.z;
+  gl_PointSize=min(max(px,1.5),80.);
+  vA=clamp(px,.35,1.);
+  gl_Position=projectionMatrix*mv;
+ }`,
+ fragmentShader:`varying float vA,vL;
+ void main(){
+  vec2 q=gl_PointCoord*2.-1.;float r=length(q);if(r>1.)discard;
+  vec3 col=vec3(.96,.98,1.)*vL*(.92+.08*(.5-q.y*.5));
+  float al=vA*smoothstep(1.,.2,r);
+  if(al<.03)discard;
+  gl_FragColor=vec4(col,al*.9);
+ }`}));
+bubPts.frustumCulled=false;sc.add(bubPts);
+const sprayPts=new THREE.Points(sg,new THREE.ShaderMaterial({uniforms:sprayU,transparent:true,depthWrite:false,
+ vertexShader:WG+SH+`attribute vec4 aS,aD;uniform float uPx,uSp;varying float vA;
+ void main(){
+  float L=.8+aS.z*1.6;
+  float x=uT/L+aS.w*50.-.95;
+  float cf=floor(x);float age=(x-cf)*L;
+  float ls=.5+aD.x*1.4;
+  if(age>ls)HIDE
+  float cyc=mod(cf,997.);
+  if(R(aD,cyc,0.)>uSp*.6)HIDE
+  float popT=uT-age;
+  vec2 b;vec3 d,vel;vec2 cv;float v;
+  if(bAccept(aS,cyc,popT-.95*L,b,d,vel,cv,v)<.5)HIDE
+  vec2 bb=b+cv*.95*L*.3;
+  vec3 d2,nn2,v2;vec2 c2;float J2;
+  waves(bb,popT,d2,nn2,J2,v2,c2);
+  float m=min(2.,.6+(v-.3)*1.8);
+  float cr=.9+R(aD,cyc,1.)*.22,g=R(aD,cyc,2.)*.55;
+  vec3 v0=vec3(c2.x*cr+v2.x*.8+cos(uW)*g+(R(aD,cyc,3.)-.5)*.65,
+   (1.0+R(aD,cyc,4.)*2.4)*m*(.38+uH*.18)+max(v2.y,0.),
+   c2.y*cr+v2.z*.8+sin(uW)*g+(R(aD,cyc,5.)-.5)*.65);
+  float e=(1.-exp(-.4*age))/.4;
+  vec3 p=vec3(bb.x+d2.x+v0.x*e,d2.y+.1+v0.y*age-4.9*age*age,bb.y+d2.z+v0.z*e);
+  if(v0.y-9.8*age<0.){
+   vec3 d3,n3,vl3;vec2 c3;float J3;waves(p.xz,uT,d3,n3,J3,vl3,c3);
+   if(p.y<d3.y)HIDE
+  }
+  float size=(.025+R(aD,cyc,6.)*.05)*(.8+.4*m);
+  vec4 mv=modelViewMatrix*vec4(p,1.);
+  float px=size*uPx/-mv.z;
+  gl_PointSize=max(px,1.2);
+  vA=(1.-age/ls)*clamp(px,.3,1.);
+  gl_Position=projectionMatrix*mv;
+ }`,
+ fragmentShader:`varying float vA;void main(){float r=length(gl_PointCoord-.5)*2.;if(r>1.)discard;gl_FragColor=vec4(.95,.98,1.,vA*smoothstep(1.,.3,r)*.85);}`}));
+sprayPts.frustumCulled=false;sc.add(sprayPts);
+
+function U(){
+ uni.uH.value=P.height;uni.uL.value=P.length;uni.uQ.value=P.steep;uni.uS.value=P.spread;
+ uni.uW.value=P.wind*Math.PI/180;uni.uWs.value=P.swellDir*Math.PI/180;uni.uHs.value=P.swellH;uni.uPt.value=P.patch;
+ uni.uSd.value.set(S1,S2);uni.uGrain.value=P.grain;sprayU.uSp.value=P.spray;uni.uBub.value=P.bub;uni.uFl.value=P.flat;bg.setDrawRange(0,P.sprayN);sg.setDrawRange(0,P.sprayN*3);uni.uF.value=P.foam;
+ uni.uDeep.value.setHSL(.45+P.hue*.25,P.sat,.12*P.lum);uni.uShal.value.setHSL(.45+P.hue*.25,P.sat*.85,.35*P.lum);uni.uCrest.value=P.crest;uni.uFoamDetail.value=P.foamDetail;uni.uFoamCurl.value=P.foamCurl;uni.uAs.value=P.asym;uni.uN.value=P.nW;uni.uOver.value=P.over;
+}
+function rs(){const w=innerWidth,h=innerHeight;R.setSize(w,h,false);cam.aspect=w/h;cam.updateProjectionMatrix();sprayU.uPx.value=R.domElement.height/(2*Math.tan(cam.fov*Math.PI/360))}
+addEventListener('resize',rs);rs();
+reseed(12345);DEF.forEach(d=>sync(d[0]));
+let last=performance.now(),T=0;
+function loop(now){
+ const dt=Math.min((now-last)/1000,.1);last=now;
+ const dtS=dt*P.slow*P.speed;T+=dtS;uni.uT.value=T;
+ foamStep(dtS);bubPts.visible=P.bub>0;sprayPts.visible=P.spray>0&&P.bub>0;
+ cam.position.set(0,P.cam*.5,P.dist);cam.lookAt(0,0,P.dist-P.cam*.5/Math.tan(P.pitch*Math.PI/180));
+ uni.uCam.value.copy(cam.position);
+ R.render(sc,cam);requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
